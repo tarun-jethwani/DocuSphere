@@ -1,15 +1,17 @@
-import requests, re
+# app.py
+
+# --- third-party ---
+import requests
 from bs4 import BeautifulSoup
-import trafilatura
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, HttpUrl
 from readability import Document
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, HttpUrl, URLRequest
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import requests, re
-from bs4 import BeautifulSoup
+import trafilatura
 
 app = FastAPI()
+
+class URLRequest(BaseModel):
+    url: HttpUrl  # requires http/https in the JSON
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
@@ -29,7 +31,7 @@ def fetch_html(url: str) -> str:
 def trafilatura_extract(html: str, url: str) -> str | None:
     text = trafilatura.extract(
         html,
-        url=url,
+        url=url,  # must be a plain string
         include_comments=False,
         include_tables=False,
         favor_precision=True,
@@ -58,7 +60,10 @@ def readability_extract(html: str) -> str | None:
         print(f"[readability] error: {e}")
         return None
 
-def scrape_text(url: str) -> str:
+def scrape_text(url_in) -> str:
+    # Normalize HttpUrl/any -> str
+    url = str(url_in)
+
     html = fetch_html(url)
 
     # 1) Try trafilatura
@@ -67,13 +72,13 @@ def scrape_text(url: str) -> str:
         print("[extractor] trafilatura used")
         return text
 
-    # 2) Fallback to readability + BS clean
+    # 2) Fallback to readability
     text = readability_extract(html)
     if text:
         print("[extractor] readability fallback used")
         return text
 
-    # 3) Last resort: simple “largest block” heuristic to get H1 + body
+    # 3) Heuristic fallback: H1 + largest text block
     print("[extractor] using heuristic fallback")
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style", "noscript", "svg", "img", "form", "iframe", "header", "footer", "nav", "aside"]):
@@ -99,7 +104,7 @@ def scrape_text(url: str) -> str:
 
 @app.post("/scrape")
 def scrape_endpoint(req: URLRequest):
-    text = scrape_text(req.url)
+    text = scrape_text(str(req.url))  # ensure plain string
     print("\n--- Extracted Text ---\n")
     print(text)
     print("\n----------------------\n")
