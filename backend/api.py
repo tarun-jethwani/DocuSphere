@@ -8,6 +8,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests, re
 from bs4 import BeautifulSoup
+from services.scrappers import scrape_text
+
+
 
 app = FastAPI()
 
@@ -16,86 +19,6 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
-
-def fetch_html(url: str) -> str:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=25)
-        r.raise_for_status()
-        return r.text
-    except requests.RequestException as e:
-        print(f"[fetch] error: {e}")
-        raise HTTPException(status_code=400, detail=f"Fetch failed: {e}")
-
-def trafilatura_extract(html: str, url: str) -> str | None:
-    text = trafilatura.extract(
-        html,
-        url=url,
-        include_comments=False,
-        include_tables=False,
-        favor_precision=True,
-    )
-    return text.strip() if text else None
-
-def readability_extract(html: str) -> str | None:
-    try:
-        doc = Document(html)
-        title = (doc.short_title() or "").strip()
-        summary_html = doc.summary(html_partial=True)
-        soup = BeautifulSoup(summary_html, "html.parser")
-
-        parts = []
-        for tag in soup.find_all(["h1", "h2", "h3", "p", "li"]):
-            t = tag.get_text(" ", strip=True)
-            if not t:
-                continue
-            parts.append(f"- {t}" if tag.name == "li" else t)
-
-        body = "\n".join(parts).strip()
-        if not body:
-            return None
-        return f"{title}\n\n{body}" if title else body
-    except Exception as e:
-        print(f"[readability] error: {e}")
-        return None
-
-def scrape_text(url: str) -> str:
-    html = fetch_html(url)
-
-    # 1) Try trafilatura
-    text = trafilatura_extract(html, url)
-    if text:
-        print("[extractor] trafilatura used")
-        return text
-
-    # 2) Fallback to readability + BS clean
-    text = readability_extract(html)
-    if text:
-        print("[extractor] readability fallback used")
-        return text
-
-    # 3) Last resort: simple “largest block” heuristic to get H1 + body
-    print("[extractor] using heuristic fallback")
-    soup = BeautifulSoup(html, "html.parser")
-    for t in soup(["script", "style", "noscript", "svg", "img", "form", "iframe", "header", "footer", "nav", "aside"]):
-        t.decompose()
-
-    title_el = soup.select_one("h1") or soup.title
-    title = title_el.get_text(strip=True) if title_el else ""
-
-    blocks = soup.find_all(["article", "section", "div"])
-    node = max(blocks, key=lambda b: len(b.get_text(" ", strip=True)), default=soup)
-
-    parts = []
-    for tag in node.find_all(["h1", "h2", "h3", "p", "li"]):
-        t = tag.get_text(" ", strip=True)
-        if t:
-            parts.append(f"- {t}" if tag.name == "li" else t)
-    body = "\n".join(parts).strip()
-
-    if body:
-        return f"{title}\n\n{body}" if title else body
-
-    raise HTTPException(status_code=422, detail="Could not extract main content (all extractors failed)")
 
 @app.post("/scrape")
 def scrape_endpoint(req: URLRequest):
